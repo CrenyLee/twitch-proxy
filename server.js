@@ -1,62 +1,57 @@
-// server.js
-import express from 'express';
-import puppeteer from 'puppeteer-core'; // Railway上用chrome-aws-lambda
-import chromium from '@sparticuz/chromium-min'; // 專門for serverless環境
-
+const express = require('express');
+const puppeteer = require('puppeteer');
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 app.get('/api', async (req, res) => {
   const channel = req.query.channel;
   if (!channel) {
-    return res.status(400).json({ error: '缺少 channel 參數' });
+    return res.status(400).json({ error: 'Missing channel' });
   }
 
-  let browser = null;
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
+    ]
+  });
 
   try {
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath,
-      headless: chromium.headless,
-    });
-
     const page = await browser.newPage();
-    const url = `https://sullygnome.com/channel/${channel}/30`;
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36');
+    const url = `https://twitchtracker.com/${channel}`;
 
-    // 等待頁面資料載入
-    await page.waitForSelector('.col-lg-3.col-md-3.col-sm-6.col-6.text-center', { timeout: 20000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // 抓取資料
     const data = await page.evaluate(() => {
-      const stats = document.querySelectorAll('.col-lg-3.col-md-3.col-sm-6.col-6.text-center');
-      const followers = stats[0]?.querySelector('div:nth-child(3) div')?.innerText?.replace(/,/g, '') || null;
-      const avgViewers = stats[2]?.querySelector('div:nth-child(3) div')?.innerText?.replace(/,/g, '') || null;
-      const peakViewers = stats[3]?.querySelector('div:nth-child(3) div')?.innerText?.replace(/,/g, '') || null;
+      const getTextAfterIcon = (selector) => {
+        const el = document.querySelector(selector);
+        return el ? el.innerText.replace(/,/g, '').trim() : null;
+      };
+
+      const followers = getTextAfterIcon('.fa-heart + span');
+      
+      const avgViewersRow = Array.from(document.querySelectorAll('table td')).find(td => td.innerText.includes('Avg. viewers'));
+      const peakViewersRow = Array.from(document.querySelectorAll('table td')).find(td => td.innerText.includes('Peak viewers'));
+      
+      const averageViewers = avgViewersRow ? avgViewersRow.nextElementSibling.innerText.replace(/,/g, '').trim() : null;
+      const peakViewers = peakViewersRow ? peakViewersRow.nextElementSibling.innerText.replace(/,/g, '').trim() : null;
 
       return {
-        followers: followers ? parseInt(followers) : null,
-        averageViewers: avgViewers ? parseInt(avgViewers) : null,
-        peakViewers: peakViewers ? parseInt(peakViewers) : null,
+        followers,
+        averageViewers,
+        peakViewers
       };
     });
 
     res.json(data);
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error', message: error.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   } finally {
-    if (browser !== null) {
-      await browser.close();
-    }
+    await browser.close();
   }
-});
-
-app.get('/', (req, res) => {
-  res.send('Puppeteer Proxy Ready.');
 });
 
 app.listen(PORT, () => {
